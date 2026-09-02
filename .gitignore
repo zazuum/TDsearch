@@ -1,0 +1,16 @@
+# .gitignore file
+ 
+# Python, distribution & packaging
+build/
+dist/
+*.egg-info/
+
+
+# Environment
+venv/
+
+# IDE
+.vscode
+ 
+# .DS_Store 
+**/.DS_Store
