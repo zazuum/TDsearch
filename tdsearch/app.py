@@ -53,7 +53,10 @@ except ImportError:
         process_single_file = None
         xlsxgrep_version = "unknown"
 
-from tdsearch import __version__ as tdsearch_version
+try:
+    from tdsearch import __version__ as tdsearch_version
+except ModuleNotFoundError:
+    from __init__ import __version__ as tdsearch_version
 
 
 SUPPORTED_EXTENSIONS = (
