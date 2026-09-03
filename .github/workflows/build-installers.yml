@@ -1,0 +1,106 @@
+name: Build installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build executable
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDsearch-windows
+          path: dist/TDsearch/TDsearch.exe
+
+  macos:
+    name: macOS DMG and PKG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build application bundle and installers
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          VERSION=$(python -c "from tdsearch import __version__; print(__version__)")
+          hdiutil create -volname TDsearch -srcfolder dist/TDsearch.app -ov -format UDZO "dist/TDsearch-${VERSION}-macos.dmg"
+          productbuild --component dist/TDsearch.app /Applications "dist/TDsearch-${VERSION}-macos.pkg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDsearch-macos
+          path: |
+            dist/*.dmg
+            dist/*.pkg
+
+  debian:
+    name: Debian DEB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Debian package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          pyinstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          VERSION=$(python -c "from tdsearch import __version__; print(__version__)")
+          mkdir -p package-deb/DEBIAN package-deb/usr/lib/tdsearch package-deb/usr/bin package-deb/usr/share/applications
+          cp -R dist/tdsearch package-deb/usr/lib/tdsearch/
+          ln -s /usr/lib/tdsearch/tdsearch/tdsearch package-deb/usr/bin/tdsearch
+          printf 'Package: tdsearch\nVersion: %s\nArchitecture: amd64\nMaintainer: Ivan Cvitic <cviticivan@gmail.com>\nDepends: libgl1, libegl1\nDescription: Desktop GUI for tabular data search\n' "$VERSION" > package-deb/DEBIAN/control
+          printf '[Desktop Entry]\nType=Application\nName=TDsearch\nExec=tdsearch\nCategories=Utility;Office;\nTerminal=false\n' > package-deb/usr/share/applications/tdsearch.desktop
+          dpkg-deb --build package-deb "dist/tdsearch-${VERSION}-amd64.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDsearch-debian
+          path: dist/*.deb
+
+  fedora:
+    name: Fedora RPM
+    runs-on: ubuntu-latest
+    container: fedora:41
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: dnf -y install python3 python3-pip rpm-build findutils
+      - name: Build RPM package
+        run: |
+          python3 -m pip install --break-system-packages --upgrade pip
+          python3 -m pip install --break-system-packages . pyinstaller
+          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
+          mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          mkdir -p package-rpm/usr/lib/tdsearch package-rpm/usr/bin package-rpm/usr/share/applications
+          cp -R dist/tdsearch package-rpm/usr/lib/tdsearch/
+          ln -s /usr/lib/tdsearch/tdsearch/tdsearch package-rpm/usr/bin/tdsearch
+          printf '[Desktop Entry]\nType=Application\nName=TDsearch\nExec=tdsearch\nCategories=Utility;Office;\nTerminal=false\n' > package-rpm/usr/share/applications/tdsearch.desktop
+          tar -C package-rpm -czf "rpmbuild/SOURCES/tdsearch-${VERSION}.tar.gz" .
+          printf 'Name: tdsearch\nVersion: %s\nRelease: 1%%{?dist}\nSummary: Desktop GUI for tabular data search\nLicense: MIT\nBuildArch: x86_64\nSource0: %%{name}-%%{version}.tar.gz\n\n%%description\nDesktop GUI for tabular data search.\n\n%%prep\n%%setup -q -c -T\ntar -xzf %%{SOURCE0}\n\n%%install\nmkdir -p %%{buildroot}\ncp -a . %%{buildroot}/\n\n%%files\n/usr\n' "$VERSION" > rpmbuild/SPECS/tdsearch.spec
+          rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/tdsearch.spec
+          cp rpmbuild/RPMS/x86_64/*.rpm dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDsearch-fedora
+          path: dist/*.rpm
