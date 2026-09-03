@@ -124,7 +124,7 @@ jobs:
           Source0: %{name}-%{version}.tar.gz
 
           %global debug_package %{nil}
-          %global _missing_build_ids_terminate_build 0
+          %undefine _missing_build_ids_terminate_build
 
           %description
           Desktop GUI for tabular data search.
@@ -148,7 +148,6 @@ jobs:
           rpmbuild \
             --define "_topdir $(pwd)/rpmbuild" \
             --define "debug_package %{nil}" \
-            --define "__debug_install_post %{nil}" \
             -bb rpmbuild/SPECS/tdsearch.spec
 
           cp rpmbuild/RPMS/x86_64/*.rpm dist/
