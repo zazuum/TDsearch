@@ -83,8 +83,10 @@ jobs:
     container: fedora:41
     steps:
       - uses: actions/checkout@v4
+
       - name: Install build tools
         run: dnf -y install python3 python3-pip rpm-build findutils
+
       - name: Build RPM package
         run: |
           set -euxo pipefail
@@ -92,6 +94,7 @@ jobs:
           python3 -m pip install --break-system-packages --upgrade pip
           python3 -m pip install --break-system-packages . pyinstaller
           python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+
           VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
 
           mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
@@ -112,9 +115,6 @@ jobs:
           tar -C package-rpm -czf "rpmbuild/SOURCES/tdsearch-${VERSION}.tar.gz" .
 
           cat > rpmbuild/SPECS/tdsearch.spec <<EOF
-          %global debug_package %{nil}
-          %define __debug_install_post %{nil}
-
           Name: tdsearch
           Version: ${VERSION}
           Release: 1%{?dist}
@@ -122,6 +122,9 @@ jobs:
           License: MIT
           BuildArch: x86_64
           Source0: %{name}-%{version}.tar.gz
+
+          %global debug_package %{nil}
+          %global _missing_build_ids_terminate_build 0
 
           %description
           Desktop GUI for tabular data search.
@@ -142,8 +145,14 @@ jobs:
           - Initial Fedora package
           EOF
 
-          rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/tdsearch.spec
+          rpmbuild \
+            --define "_topdir $(pwd)/rpmbuild" \
+            --define "debug_package %{nil}" \
+            --define "__debug_install_post %{nil}" \
+            -bb rpmbuild/SPECS/tdsearch.spec
+
           cp rpmbuild/RPMS/x86_64/*.rpm dist/
+
       - uses: actions/upload-artifact@v4
         with:
           name: TDsearch-fedora
