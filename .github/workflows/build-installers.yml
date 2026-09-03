@@ -77,78 +77,74 @@ jobs:
           name: TDsearch-debian
           path: dist/*.deb
 
-fedora:
-  name: Fedora RPM
-  runs-on: ubuntu-latest
-  container: fedora:41
-  steps:
-    - uses: actions/checkout@v4
+  fedora:
+    name: Fedora RPM
+    runs-on: ubuntu-latest
+    container: fedora:41
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: dnf -y install python3 python3-pip rpm-build findutils
+      - name: Build RPM package
+        run: |
+          set -euxo pipefail
 
-    - name: Install build tools
-      run: dnf -y install python3 python3-pip rpm-build findutils
+          python3 -m pip install --break-system-packages --upgrade pip
+          python3 -m pip install --break-system-packages . pyinstaller
+          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
 
-    - name: Build RPM package
-      run: |
-        set -euxo pipefail
+          mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          mkdir -p package-rpm/usr/lib/tdsearch package-rpm/usr/bin package-rpm/usr/share/applications
 
-        python3 -m pip install --break-system-packages --upgrade pip
-        python3 -m pip install --break-system-packages . pyinstaller
-        python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          cp -R dist/tdsearch package-rpm/usr/lib/tdsearch/
+          ln -s /usr/lib/tdsearch/tdsearch/tdsearch package-rpm/usr/bin/tdsearch
 
-        VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
+          cat > package-rpm/usr/share/applications/tdsearch.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=TDsearch
+          Exec=tdsearch
+          Categories=Utility;Office;
+          Terminal=false
+          EOF
 
-        mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-        mkdir -p package-rpm/usr/lib/tdsearch package-rpm/usr/bin package-rpm/usr/share/applications
+          tar -C package-rpm -czf "rpmbuild/SOURCES/tdsearch-${VERSION}.tar.gz" .
 
-        cp -R dist/tdsearch package-rpm/usr/lib/tdsearch/
-        ln -s /usr/lib/tdsearch/tdsearch/tdsearch package-rpm/usr/bin/tdsearch
+          cat > rpmbuild/SPECS/tdsearch.spec <<EOF
+          %global debug_package %{nil}
+          %define __debug_install_post %{nil}
 
-        cat > package-rpm/usr/share/applications/tdsearch.desktop <<'EOF'
-        [Desktop Entry]
-        Type=Application
-        Name=TDsearch
-        Exec=tdsearch
-        Categories=Utility;Office;
-        Terminal=false
-        EOF
+          Name: tdsearch
+          Version: ${VERSION}
+          Release: 1%{?dist}
+          Summary: Desktop GUI for tabular data search
+          License: MIT
+          BuildArch: x86_64
+          Source0: %{name}-%{version}.tar.gz
 
-        tar -C package-rpm -czf "rpmbuild/SOURCES/tdsearch-${VERSION}.tar.gz" .
+          %description
+          Desktop GUI for tabular data search.
 
-        cat > rpmbuild/SPECS/tdsearch.spec <<EOF
-        %global debug_package %{nil}
-        %global __os_install_post %{nil}
+          %prep
+          %setup -q -c -T
+          tar -xzf %{SOURCE0}
 
-        Name: tdsearch
-        Version: ${VERSION}
-        Release: 1%{?dist}
-        Summary: Desktop GUI for tabular data search
-        License: MIT
-        BuildArch: x86_64
-        Source0: %{name}-%{version}.tar.gz
+          %install
+          mkdir -p %{buildroot}
+          cp -a . %{buildroot}/
 
-        %description
-        Desktop GUI for tabular data search.
+          %files
+          /usr
 
-        %prep
-        %setup -q -c -T
-        tar -xzf %{SOURCE0}
+          %changelog
+          * Wed Sep 03 2026 Ivan Cvitic <cviticivan@gmail.com> - ${VERSION}-1
+          - Initial Fedora package
+          EOF
 
-        %install
-        mkdir -p %{buildroot}
-        cp -a . %{buildroot}/
-
-        %files
-        /usr
-
-        %changelog
-        * Wed Sep 03 2026 Ivan Cvitic <cviticivan@gmail.com> - ${VERSION}-1
-        - Initial Fedora package
-        EOF
-
-        rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/tdsearch.spec
-        cp rpmbuild/RPMS/x86_64/*.rpm dist/
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: TDsearch-fedora
-        path: dist/*.rpm
+          rpmbuild --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/tdsearch.spec
+          cp rpmbuild/RPMS/x86_64/*.rpm dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDsearch-fedora
+          path: dist/*.rpm
