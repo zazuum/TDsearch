@@ -93,7 +93,7 @@ jobs:
 
           python3 -m pip install --break-system-packages --upgrade pip
           python3 -m pip install --break-system-packages . pyinstaller
-          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --exclude-module PySide6.scripts --collect-all xlsxgrep tdsearch/app.py
 
           VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
 
