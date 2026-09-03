@@ -96,6 +96,7 @@ jobs:
           python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
 
           VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
+          CHANGELOG_DATE=$(date '+%a %b %d %Y')
 
           mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
           mkdir -p package-rpm/usr/lib/tdsearch package-rpm/usr/bin package-rpm/usr/share/applications
@@ -125,6 +126,7 @@ jobs:
 
           %global debug_package %{nil}
           %undefine _missing_build_ids_terminate_build
+          %define __debug_install_post %{nil}
 
           %description
           Desktop GUI for tabular data search.
@@ -141,7 +143,7 @@ jobs:
           /usr
 
           %changelog
-          * Wed Sep 03 2026 Ivan Cvitic <cviticivan@gmail.com> - ${VERSION}-1
+          * ${CHANGELOG_DATE} Ivan Cvitic <cviticivan@gmail.com> - ${VERSION}-1
           - Initial Fedora package
           EOF
 
