@@ -43,7 +43,11 @@ jobs:
           python -m pip install . pyinstaller
           pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
           VERSION=$(python -c "from tdsearch import __version__; print(__version__)")
-          hdiutil create -volname TDsearch -srcfolder dist/TDsearch.app -ov -format UDZO "dist/TDsearch-${VERSION}-macos.dmg"
+          DMG_STAGING_DIR=$(mktemp -d)
+          cp -R dist/TDsearch.app "$DMG_STAGING_DIR/"
+          ln -s /Applications "$DMG_STAGING_DIR/Applications"
+          hdiutil create -volname TDsearch -srcfolder "$DMG_STAGING_DIR" -ov -format UDZO "dist/TDsearch-${VERSION}-macos.dmg"
+          rm -rf "$DMG_STAGING_DIR"
           productbuild --component dist/TDsearch.app /Applications "dist/TDsearch-${VERSION}-macos.pkg"
       - uses: actions/upload-artifact@v4
         with:
