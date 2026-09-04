@@ -4,9 +4,12 @@
 """PySide6 Desktop Graphical User Interface (GUI) for Tabular Data Search (TDsearch)."""
 
 import csv
+import functools
+import multiprocessing
 import os
 import re
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from time import perf_counter
 
@@ -39,7 +42,7 @@ try:
         QTabWidget,
         QSizePolicy,
     )
-    from PySide6.QtGui import QColor, QFont, QPalette
+    from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QPalette
     PYSIDE_AVAILABLE = True
 except ImportError:
     PYSIDE_AVAILABLE = False
@@ -336,6 +339,10 @@ if PYSIDE_AVAILABLE:
             self.path_str = path_str
             self.recursive = recursive
             self.opts = opts
+            self._stop_requested = False
+
+        def request_stop(self):
+            self._stop_requested = True
 
         def run(self):
             if process_single_file is None:
@@ -362,8 +369,19 @@ if PYSIDE_AVAILABLE:
             total_files = len(files)
             self.progress_signal.emit(0, max(total_files, 1), build_progress_message(0, total_files))
 
-            for idx, f in enumerate(files):
-                res = process_single_file(f, self.opts)
+            jobs = self.opts.get("jobs") or 0
+            if jobs <= 0:
+                jobs = os.cpu_count() or 1
+
+            if jobs > 1 and total_files > 1:
+                file_results, processed_count, stopped = self._process_files_parallel(files, jobs)
+            else:
+                file_results, processed_count, stopped = self._process_files_sequential(files)
+
+            for idx, res in enumerate(file_results):
+                if res is None:
+                    continue
+                f = files[idx]
                 stdout_lines = res.get("stdout", [])
                 counts = res.get("counts", (0, 0, 0))
                 processing_errors.extend(normalize_processing_errors(res.get("stderr", [])))
@@ -400,12 +418,20 @@ if PYSIDE_AVAILABLE:
 
                         results.append((file_name, sheet_name, content))
 
-                processed_files = idx + 1
-                self.progress_signal.emit(
-                    processed_files,
-                    max(total_files, 1),
-                    build_progress_message(processed_files, total_files),
+            status_message = (
+                f"Search stopped. Processed {processed_count}/{total_files} files "
+                f"before stopping; {len(results)} result(s) found so far."
+                if stopped
+                else format_search_status_message(
+                    self.opts,
+                    file_count=len(files),
+                    result_count=len(results),
+                    matched_group_count=matched_group_count,
+                    matched_file_count=matched_file_count,
+                    matched_cell_count=matched_cell_count,
+                    matched_string_count=matched_string_count,
                 )
+            )
 
             self.result_signal.emit({
                 "results": results,
@@ -416,16 +442,66 @@ if PYSIDE_AVAILABLE:
                 "matched_string_count": matched_string_count,
                 "matched_file_count": matched_file_count,
                 "processing_errors": processing_errors,
-                "status_message": format_search_status_message(
-                    self.opts,
-                    file_count=len(files),
-                    result_count=len(results),
-                    matched_group_count=matched_group_count,
-                    matched_file_count=matched_file_count,
-                    matched_cell_count=matched_cell_count,
-                    matched_string_count=matched_string_count,
-                ),
+                "stopped": stopped,
+                "status_message": status_message,
             })
+
+        def _process_files_sequential(self, files):
+            total_files = len(files)
+            file_results = [None] * total_files
+            processed_count = 0
+            stopped = False
+
+            for idx, f in enumerate(files):
+                if self._stop_requested:
+                    stopped = True
+                    break
+                file_results[idx] = process_single_file(f, self.opts)
+                processed_count = idx + 1
+                self.progress_signal.emit(
+                    processed_count,
+                    max(total_files, 1),
+                    build_progress_message(processed_count, total_files),
+                )
+
+            return file_results, processed_count, stopped
+
+        def _process_files_parallel(self, files, jobs):
+            total_files = len(files)
+            file_results = [None] * total_files
+            processed_count = 0
+            stopped = False
+
+            worker_fn = functools.partial(process_single_file, opts=self.opts)
+            with ProcessPoolExecutor(max_workers=jobs) as executor:
+                future_to_idx = {
+                    executor.submit(worker_fn, f): idx for idx, f in enumerate(files)
+                }
+                for future in as_completed(future_to_idx):
+                    if self._stop_requested:
+                        stopped = True
+                        for pending_future in future_to_idx:
+                            pending_future.cancel()
+                        break
+
+                    idx = future_to_idx[future]
+                    try:
+                        file_results[idx] = future.result()
+                    except Exception as exc:
+                        file_results[idx] = {
+                            "file": files[idx],
+                            "stdout": [],
+                            "stderr": [f"Error:\tCould not process file: {files[idx]} ({exc})\n"],
+                            "counts": (0, 0, 0),
+                        }
+                    processed_count += 1
+                    self.progress_signal.emit(
+                        processed_count,
+                        max(total_files, 1),
+                        build_progress_message(processed_count, total_files),
+                    )
+
+            return file_results, processed_count, stopped
 
     class TDSearchGUI(QMainWindow):
         """TDsearch PySide6 Desktop Application."""
@@ -443,6 +519,32 @@ if PYSIDE_AVAILABLE:
             self.original_stylesheet = app.styleSheet()
 
             self.init_ui()
+            self.create_menus()
+
+        def create_menus(self):
+            menu_bar = self.menuBar()
+
+            file_menu = menu_bar.addMenu("File")
+            quit_action = QAction("Quit", self)
+            quit_action.setMenuRole(QAction.QuitRole)
+            quit_action.setShortcut(QKeySequence.Quit)
+            quit_action.triggered.connect(self.close)
+            file_menu.addAction(quit_action)
+
+            help_menu = menu_bar.addMenu("Help")
+            about_action = QAction("About TDsearch", self)
+            about_action.setMenuRole(QAction.AboutRole)
+            about_action.triggered.connect(self.show_about_dialog)
+            help_menu.addAction(about_action)
+
+        def show_about_dialog(self):
+            QMessageBox.about(
+                self,
+                "About TDsearch",
+                f"<h3>TDsearch v{tdsearch_version}</h3>"
+                f"<p>Desktop GUI for Tabular Data Search, powered by xlsxgrep v{xlsxgrep_version}.</p>"
+                "<p>Copyright \u00a9 Ivan Cvitic</p>",
+            )
 
         def init_ui(self):
             central_widget = QWidget()
@@ -619,6 +721,20 @@ if PYSIDE_AVAILABLE:
             self.btn_search.clicked.connect(self.start_search)
             row6.addWidget(self.btn_search)
 
+            self.btn_stop = QPushButton("Stop")
+            self.btn_stop.clicked.connect(self.stop_search)
+            self.btn_stop.setVisible(False)
+            self.btn_stop.setStyleSheet(
+                "QPushButton { background-color: #c0392b; color: white; }"
+                "QPushButton:disabled { background-color: #e0a199; color: #f5f5f5; }"
+            )
+            button_width = max(
+                self.btn_search.sizeHint().width(), self.btn_stop.sizeHint().width()
+            )
+            self.btn_search.setFixedWidth(button_width)
+            self.btn_stop.setFixedWidth(button_width)
+            row6.addWidget(self.btn_stop)
+
             btn_export = QPushButton("Export CSV...")
             btn_export.clicked.connect(self.export_csv)
             row6.addWidget(btn_export)
@@ -784,6 +900,8 @@ if PYSIDE_AVAILABLE:
                 self.combo_regex_type.setCurrentIndex(0)
 
         def on_count_toggled(self, checked):
+            if checked:
+                self.chk_filename.setChecked(True)
             self.update_output_columns()
 
 
@@ -900,6 +1018,9 @@ if PYSIDE_AVAILABLE:
             )
 
             self.btn_search.setEnabled(False)
+            self.btn_search.setVisible(False)
+            self.btn_stop.setEnabled(True)
+            self.btn_stop.setVisible(True)
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(True)
@@ -917,12 +1038,21 @@ if PYSIDE_AVAILABLE:
             self.worker.progress_signal.connect(self.on_search_progress)
             self.worker.start()
 
+        def stop_search(self):
+            if getattr(self, "worker", None) is not None and self.worker.isRunning():
+                self.btn_stop.setEnabled(False)
+                self.status_bar.showMessage("Stopping search...")
+                self.worker.request_stop()
+
         def on_search_progress(self, value, maximum, msg):
             self.progress_bar.setRange(0, maximum)
             self.progress_bar.setValue(value)
             self.status_bar.showMessage(msg)
 
         def on_search_finished(self, data):
+            self.btn_stop.setVisible(False)
+            self.btn_stop.setEnabled(True)
+            self.btn_search.setVisible(True)
             self.btn_search.setEnabled(True)
             self.progress_bar.setValue(self.progress_bar.maximum())
             self.progress_bar.setVisible(False)
@@ -1004,4 +1134,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Required so PyInstaller-frozen child processes spawned by ProcessPoolExecutor
+    # run their worker task instead of relaunching the whole GUI application.
+    multiprocessing.freeze_support()
     main()
