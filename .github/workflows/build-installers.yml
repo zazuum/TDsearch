@@ -23,7 +23,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
       - uses: actions/upload-artifact@v4
         with:
           name: TDsearch-windows
@@ -41,7 +41,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
           VERSION=$(python -c "from tdsearch import __version__; print(__version__)")
           hdiutil create -volname TDsearch -srcfolder dist/TDsearch.app -ov -format UDZO "dist/TDsearch-${VERSION}-macos.dmg"
           productbuild --component dist/TDsearch.app /Applications "dist/TDsearch-${VERSION}-macos.pkg"
@@ -64,7 +64,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep tdsearch/app.py
+          pyinstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
           VERSION=$(python -c "from tdsearch import __version__; print(__version__)")
           mkdir -p package-deb/DEBIAN package-deb/usr/lib/tdsearch package-deb/usr/bin package-deb/usr/share/applications
           cp -R dist/tdsearch package-deb/usr/lib/tdsearch/
@@ -93,7 +93,7 @@ jobs:
 
           python3 -m pip install --break-system-packages --upgrade pip
           python3 -m pip install --break-system-packages . pyinstaller
-          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --exclude-module PySide6.scripts --exclude-module PySide6.scripts.deploy_lib --exclude-module PySide6.scripts.project_lib --exclude-module PySide6.scripts.pyside_tool --collect-all xlsxgrep tdsearch/app.py
+          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --exclude-module PySide6.scripts --exclude-module PySide6.scripts.deploy_lib --exclude-module PySide6.scripts.project_lib --exclude-module PySide6.scripts.pyside_tool --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
 
           VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
 
