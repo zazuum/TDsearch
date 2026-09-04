@@ -25,13 +25,4 @@ tdsearch
 
 ## Standalone installers
 
-The GitHub Actions workflow in `.github/workflows/build-installers.yml` creates
-standalone installers without requiring Python on the target machine:
-
-- Windows: `.exe`
-- macOS: `.dmg` and `.pkg`
-- Debian/Ubuntu: `.deb`
-- Fedora: `.rpm`
-
-Run **Build installers** from the repository's Actions tab, or push a tag named
-`v*`. The completed workflow includes the installers as downloadable artifacts.
+...will follow soon
