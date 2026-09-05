@@ -42,10 +42,16 @@ try:
         QTabWidget,
         QSizePolicy,
     )
-    from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QPalette
+    from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPalette
     PYSIDE_AVAILABLE = True
 except ImportError:
     PYSIDE_AVAILABLE = False
+
+APP_ICON_PATH = (
+    Path(sys._MEIPASS) / "resources" / "icon.svg"
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent / "resources" / "icon.svg"
+)
 
 try:
     from xlsxgrep import process_single_file, __version__ as xlsxgrep_version
@@ -509,6 +515,8 @@ if PYSIDE_AVAILABLE:
         def __init__(self):
             super().__init__()
             self.setWindowTitle(f"TDsearch v{tdsearch_version} (xlsxgrep v{xlsxgrep_version})")
+            if APP_ICON_PATH.exists():
+                self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
             self.resize(900, 720)
             self.search_start_time = None
             self.processing_errors = []
@@ -538,13 +546,16 @@ if PYSIDE_AVAILABLE:
             help_menu.addAction(about_action)
 
         def show_about_dialog(self):
-            QMessageBox.about(
-                self,
-                "About TDsearch",
+            about_box = QMessageBox(self)
+            about_box.setWindowTitle("About TDsearch")
+            if APP_ICON_PATH.exists():
+                about_box.setIconPixmap(QIcon(str(APP_ICON_PATH)).pixmap(64, 64))
+            about_box.setText(
                 f"<h3>TDsearch v{tdsearch_version}</h3>"
                 f"<p>Desktop GUI for Tabular Data Search, powered by xlsxgrep v{xlsxgrep_version}.</p>"
                 "<p>Copyright \u00a9 Ivan Cvitic</p>",
             )
+            about_box.exec()
 
         def init_ui(self):
             central_widget = QWidget()
@@ -748,11 +759,13 @@ if PYSIDE_AVAILABLE:
             row6.addWidget(btn_clear)
 
             panel_layout.addLayout(row6)
-            main_layout.addWidget(panel)
+            panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            main_layout.addWidget(panel, 0)
 
             # --- Results Table ---
             self.table = QTableWidget(0, 3)
             self.table.setHorizontalHeaderLabels(["File", "Sheet / Position", "Matched Row / Line"])
+            self.table.horizontalHeaderItem(2).setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.table.setWordWrap(False)
             self.table.setAlternatingRowColors(True)
             self.reset_results_table_layout()
@@ -761,7 +774,7 @@ if PYSIDE_AVAILABLE:
             self.update_output_columns()
             self.restore_selected_theme()
             self.combo_theme.currentIndexChanged.connect(self.on_theme_changed)
-            main_layout.addWidget(self.table)
+            main_layout.addWidget(self.table, 1)
 
             # --- Status Bar & Progress Bar ---
             self.status_bar = QStatusBar()
@@ -1128,6 +1141,8 @@ def main():
         sys.exit(1)
 
     app = QApplication(sys.argv)
+    if APP_ICON_PATH.exists():
+        app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     window = TDSearchGUI()
     window.show()
     sys.exit(app.exec())
