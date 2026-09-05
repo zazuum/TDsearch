@@ -1,11 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+datas = [('tdsearch/resources', 'resources')]
 binaries = []
-hiddenimports = []
-tmp_ret = collect_all('PySide6')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+hiddenimports = ['PySide6.QtSvg']
 tmp_ret = collect_all('xlsxgrep')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pyexcel')
@@ -53,6 +51,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['tdsearch/resources/icon.icns'],
 )
 coll = COLLECT(
     exe,
@@ -66,6 +65,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='TDsearch.app',
-    icon=None,
+    icon='tdsearch/resources/icon.icns',
     bundle_identifier=None,
 )
