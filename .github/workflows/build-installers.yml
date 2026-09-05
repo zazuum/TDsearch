@@ -23,11 +23,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
+          pyinstaller --noconfirm --clean --windowed --name TDsearch --icon tdsearch/resources/icon.ico --add-data "tdsearch/resources;resources" --hidden-import PySide6.QtSvg --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
+          $VERSION = python -c "from tdsearch import __version__; print(__version__)"
+          Compress-Archive -Path "dist/TDsearch/*" -DestinationPath "dist/TDsearch-$VERSION-windows.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: TDsearch-windows
-          path: dist/TDsearch/TDsearch.exe
+          path: dist/TDsearch-*-windows.zip
 
   macos:
     name: macOS DMG and PKG
@@ -41,7 +43,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name TDsearch --collect-all PySide6 --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
+          pyinstaller --noconfirm --clean --windowed --name TDsearch --icon tdsearch/resources/icon.icns --add-data "tdsearch/resources:resources" --hidden-import PySide6.QtSvg --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
           VERSION=$(python -c "from tdsearch import __version__; print(__version__)")
           DMG_STAGING_DIR=$(mktemp -d)
           cp -R dist/TDsearch.app "$DMG_STAGING_DIR/"
@@ -68,13 +70,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pyinstaller
-          pyinstaller --noconfirm --clean --windowed --name tdsearch --collect-all PySide6 --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
+          pyinstaller --noconfirm --clean --windowed --name tdsearch --add-data "tdsearch/resources:resources" --hidden-import PySide6.QtSvg --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
           VERSION=$(python -c "from tdsearch import __version__; print(__version__)")
-          mkdir -p package-deb/DEBIAN package-deb/usr/lib/tdsearch package-deb/usr/bin package-deb/usr/share/applications
+          mkdir -p package-deb/DEBIAN package-deb/usr/lib/tdsearch package-deb/usr/bin package-deb/usr/share/applications package-deb/usr/share/icons/hicolor/256x256/apps
           cp -R dist/tdsearch package-deb/usr/lib/tdsearch/
           ln -s /usr/lib/tdsearch/tdsearch/tdsearch package-deb/usr/bin/tdsearch
+          cp tdsearch/resources/icon.png package-deb/usr/share/icons/hicolor/256x256/apps/tdsearch.png
           printf 'Package: tdsearch\nVersion: %s\nArchitecture: amd64\nMaintainer: Ivan Cvitic <cviticivan@gmail.com>\nDepends: libgl1, libegl1\nDescription: Desktop GUI for tabular data search\n' "$VERSION" > package-deb/DEBIAN/control
-          printf '[Desktop Entry]\nType=Application\nName=TDsearch\nExec=tdsearch\nCategories=Utility;Office;\nTerminal=false\n' > package-deb/usr/share/applications/tdsearch.desktop
+          printf '[Desktop Entry]\nType=Application\nName=TDsearch\nExec=tdsearch\nIcon=tdsearch\nCategories=Utility;Office;\nTerminal=false\n' > package-deb/usr/share/applications/tdsearch.desktop
           dpkg-deb --build package-deb "dist/tdsearch-${VERSION}-amd64.deb"
       - uses: actions/upload-artifact@v4
         with:
@@ -97,21 +100,23 @@ jobs:
 
           python3 -m pip install --break-system-packages --upgrade pip
           python3 -m pip install --break-system-packages . pyinstaller
-          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --exclude-module PySide6.scripts --exclude-module PySide6.scripts.deploy_lib --exclude-module PySide6.scripts.project_lib --exclude-module PySide6.scripts.pyside_tool --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
+          python3 -m PyInstaller --noconfirm --clean --windowed --name tdsearch --add-data "tdsearch/resources:resources" --hidden-import PySide6.QtSvg --exclude-module PySide6.scripts --exclude-module PySide6.scripts.deploy_lib --exclude-module PySide6.scripts.project_lib --exclude-module PySide6.scripts.pyside_tool --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
 
           VERSION=$(python3 -c "from tdsearch import __version__; print(__version__)")
 
           mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          mkdir -p package-rpm/usr/lib/tdsearch package-rpm/usr/bin package-rpm/usr/share/applications
+          mkdir -p package-rpm/usr/lib/tdsearch package-rpm/usr/bin package-rpm/usr/share/applications package-rpm/usr/share/icons/hicolor/256x256/apps
 
           cp -R dist/tdsearch package-rpm/usr/lib/tdsearch/
           ln -s /usr/lib/tdsearch/tdsearch/tdsearch package-rpm/usr/bin/tdsearch
+          cp tdsearch/resources/icon.png package-rpm/usr/share/icons/hicolor/256x256/apps/tdsearch.png
 
           cat > package-rpm/usr/share/applications/tdsearch.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
           Name=TDsearch
           Exec=tdsearch
+          Icon=tdsearch
           Categories=Utility;Office;
           Terminal=false
           EOF
@@ -161,3 +166,25 @@ jobs:
         with:
           name: TDsearch-fedora
           path: dist/*.rpm
+
+  release:
+    name: Publish GitHub Release
+    needs: [windows, macos, debian, fedora]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifacts into a single release-assets folder
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -exec cp {} release-assets/ \;
+          ls -la release-assets
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
