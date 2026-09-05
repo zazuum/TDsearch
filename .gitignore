@@ -4,6 +4,9 @@
 build/
 dist/
 *.egg-info/
+tdsearch/__pycache__/
+tdsearch/**/*.pyc
+
 
 
 # Environment
@@ -14,3 +17,7 @@ venv/
  
 # .DS_Store 
 **/.DS_Store
+
+# tests and auxiliary Scripts
+scripts/
+tests/
