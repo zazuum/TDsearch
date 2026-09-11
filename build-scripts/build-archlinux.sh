@@ -6,7 +6,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 echo "==> [1/7] Checking system dependencies..."
-REQUIRED_PACMAN_PACKAGES=(python python-pip base-devel)
+REQUIRED_PACMAN_PACKAGES=(python python-pip base-devel libglvnd)
 MISSING_PACMAN_PACKAGES=()
 for pkg in "${REQUIRED_PACMAN_PACKAGES[@]}"; do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
