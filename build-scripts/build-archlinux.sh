@@ -93,7 +93,15 @@ package() {
 }
 EOF
 
-(cd "$BUILD_DIR" && makepkg -f --noconfirm)
+if [ "$(id -u)" -eq 0 ]; then
+    if ! id -u builduser >/dev/null 2>&1; then
+        useradd -m builduser
+    fi
+    chown -R builduser:builduser "$BUILD_DIR" "$PKG_ROOT"
+    su -s /bin/bash builduser -c "cd '$BUILD_DIR' && makepkg -f --noconfirm"
+else
+    (cd "$BUILD_DIR" && makepkg -f --noconfirm)
+fi
 
 mkdir -p dist
 cp "$BUILD_DIR"/tdsearch-*.pkg.tar.* dist/
