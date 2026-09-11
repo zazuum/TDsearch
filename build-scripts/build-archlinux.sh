@@ -85,7 +85,7 @@ pkgdesc="Desktop GUI for tabular data search"
 arch=('x86_64')
 url="https://github.com/zazuum/TDsearch"
 license=('MIT')
-depends=('libgl' 'libegl' 'glibc')
+depends=('glibc' 'libglvnd')
 options=('!strip' '!debug')
 
 package() {
