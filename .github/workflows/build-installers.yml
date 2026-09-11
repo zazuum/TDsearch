@@ -26,10 +26,19 @@ jobs:
           pyinstaller --noconfirm --clean --windowed --name TDsearch --icon tdsearch/resources/icon.ico --add-data "tdsearch/resources;resources" --hidden-import PySide6.QtSvg --collect-all xlsxgrep --collect-all pyexcel --collect-all pyexcel_io --collect-all pyexcel_xls --collect-all pyexcel_xlsx --collect-all pyexcel_odsr --collect-all lml tdsearch/app.py
           $VERSION = python -c "from tdsearch import __version__; print(__version__)"
           Compress-Archive -Path "dist/TDsearch/*" -DestinationPath "dist/TDsearch-$VERSION-windows.zip"
+          echo "VERSION=$VERSION" >> $env:GITHUB_ENV
+      - name: Build installer with Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $Iscc "/DMyAppVersion=$env:VERSION" "installer\windows\TDsearch.iss"
       - uses: actions/upload-artifact@v4
         with:
           name: TDsearch-windows
-          path: dist/TDsearch-*-windows.zip
+          path: |
+            dist/TDsearch-*-windows.zip
+            dist/TDsearch-*-windows-setup.exe
 
   macos:
     name: macOS DMG and PKG
@@ -167,9 +176,27 @@ jobs:
           name: TDsearch-fedora
           path: dist/*.rpm
 
+  archlinux:
+    name: Arch Linux package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: pacman -Syu --noconfirm python python-pip base-devel
+
+      - name: Build Arch Linux package
+        run: bash scripts/build-archlinux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TDsearch-archlinux
+          path: dist/*.pkg.tar.*
+
   release:
     name: Publish GitHub Release
-    needs: [windows, macos, debian, fedora]
+    needs: [windows, macos, debian, fedora, archlinux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
