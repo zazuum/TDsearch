@@ -5,16 +5,28 @@
 
 import csv
 import functools
+import json
 import multiprocessing
 import os
 import re
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 try:
-    from PySide6.QtCore import QSettings, QStandardPaths, QThread, Signal, Qt
+    from PySide6.QtCore import (
+        QAbstractTableModel,
+        QModelIndex,
+        QSettings,
+        QStandardPaths,
+        QThread,
+        QTimer,
+        Qt,
+        Signal,
+    )
     from PySide6.QtWidgets import (
         QApplication,
         QMainWindow,
@@ -28,8 +40,8 @@ try:
         QMenu,
         QCheckBox,
         QComboBox,
-        QTableWidget,
-        QTableWidgetItem,
+        QAbstractItemView,
+        QTableView,
         QFileDialog,
         QMessageBox,
         QStatusBar,
@@ -48,9 +60,9 @@ except ImportError:
     PYSIDE_AVAILABLE = False
 
 APP_ICON_PATH = (
-    Path(sys._MEIPASS) / "resources" / "icon.svg"
+    Path(sys._MEIPASS) / "resources" / "icon.icns"
     if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent / "resources" / "icon.svg"
+    else Path(__file__).resolve().parent / "resources" / "icon.png"
 )
 
 try:
@@ -82,6 +94,33 @@ IGNORE_CASE_INLINE_FLAG_RE = re.compile(r"^\(\?[a-zA-Z-]*i[a-zA-Z-]*\)")
 SETTINGS_ORGANIZATION = "TDsearch"
 SETTINGS_APPLICATION = "TDsearch"
 VALID_THEME_CHOICES = {"system", "dark", "light"}
+GITHUB_RELEASES_API = (
+    "https://api.github.com/repos/zazuum/TDsearch/releases/latest"
+)
+GITHUB_RELEASE_URL = "https://github.com/zazuum/TDsearch/releases/latest"
+SITE_RELEASE_URL = "https://zazuum.github.io/TDsearch/releases.html"
+PYPI_PROJECT_API = "https://pypi.org/pypi/tdsearch/json"
+PYPI_PROJECT_URL = "https://pypi.org/project/tdsearch/"
+UPDATE_CHECK_INTERVAL = 24 * 60 * 60
+
+
+def version_tuple(version):
+    parts = re.findall(r"\d+", version)
+    return tuple(int(part) for part in parts)
+
+
+def update_source():
+    if getattr(sys, "frozen", False):
+        return {
+            "api_url": GITHUB_RELEASES_API,
+            "project_url": SITE_RELEASE_URL,
+            "label": "installer",
+        }
+    return {
+        "api_url": PYPI_PROJECT_API,
+        "project_url": PYPI_PROJECT_URL,
+        "label": "pip",
+    }
 
 
 def collect_target_files(path_str, recursive=True):
@@ -282,6 +321,54 @@ def format_count_result_summary(opts, group_count, cell_count, string_count):
     )
 
 
+RESULT_BATCH_SIZE = 100
+COLUMN_FIT_ROW_LIMIT = 200
+PARALLEL_IN_FLIGHT_MULTIPLIER = 4
+
+
+def parse_file_result_rows(opts, filepath, res):
+    """Convert one xlsxgrep file result into table rows, counts, and errors."""
+    if not res:
+        return [], (0, 0, 0), []
+
+    stdout_lines = res.get("stdout", [])
+    counts = res.get("counts", (0, 0, 0))
+    errors = normalize_processing_errors(res.get("stderr", []))
+    rows = []
+
+    if opts["count"]:
+        if counts[0] > 0:
+            rows.append((
+                filepath,
+                "",
+                format_count_result_summary(opts, counts[0], counts[1], counts[2]),
+            ))
+        return rows, counts, errors
+
+    with_filename = opts["with_filename"]
+    with_sheetname = opts["with_sheetname"]
+    for line in stdout_lines:
+        line_str = line.rstrip("\r\n")
+        file_name = ""
+        sheet_name = ""
+        content = line_str
+        if with_filename and with_sheetname:
+            parts = line_str.split(": ", 2)
+        else:
+            parts = line_str.split(": ", 1)
+
+        if with_filename and with_sheetname and len(parts) == 3:
+            file_name, sheet_name, content = parts
+        elif with_filename and len(parts) == 2:
+            file_name, content = parts
+        elif with_sheetname and len(parts) == 2:
+            sheet_name, content = parts
+
+        rows.append((file_name, sheet_name, content))
+
+    return rows, counts, errors
+
+
 def normalize_theme_choice(theme_choice):
     if theme_choice in VALID_THEME_CHOICES:
         return theme_choice
@@ -334,11 +421,67 @@ if PYSIDE_AVAILABLE:
         return str(Path.home())
 
 
+    class ResultsTableModel(QAbstractTableModel):
+        """Plain-tuple model so large result sets do not create a QObject per cell."""
+
+        HEADERS = ["File", "Sheet / Position", "Matched Row / Line"]
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._rows = []
+
+        def rowCount(self, parent=QModelIndex()):
+            if parent.isValid():
+                return 0
+            return len(self._rows)
+
+        def columnCount(self, parent=QModelIndex()):
+            if parent.isValid():
+                return 0
+            return 3
+
+        def data(self, index, role=Qt.DisplayRole):
+            if not index.isValid() or role not in (Qt.DisplayRole, Qt.AccessibleTextRole):
+                return None
+            return self._rows[index.row()][index.column()]
+
+        def headerData(self, section, orientation, role=Qt.DisplayRole):
+            if orientation != Qt.Horizontal:
+                return None
+            if role == Qt.DisplayRole:
+                return self.HEADERS[section]
+            if role == Qt.TextAlignmentRole and section == 2:
+                return int(Qt.AlignLeft | Qt.AlignVCenter)
+            return None
+
+        def flags(self, index):
+            if not index.isValid():
+                return Qt.NoItemFlags
+            return Qt.ItemIsEnabled | Qt.ItemIsSelectable
+
+        def append_rows(self, rows):
+            if not rows:
+                return
+            start = len(self._rows)
+            self.beginInsertRows(QModelIndex(), start, start + len(rows) - 1)
+            self._rows.extend(rows)
+            self.endInsertRows()
+
+        def clear(self):
+            self.beginResetModel()
+            self._rows = []
+            self.endResetModel()
+
+        def row_values(self, row):
+            return self._rows[row]
+
+
     class SearchWorkerThread(QThread):
         """Background thread for executing searches without freezing the GUI."""
 
         result_signal = Signal(dict)
         progress_signal = Signal(int, int, str)
+        batch_signal = Signal(list)
 
         def __init__(self, path_str, recursive, opts):
             super().__init__()
@@ -346,6 +489,13 @@ if PYSIDE_AVAILABLE:
             self.recursive = recursive
             self.opts = opts
             self._stop_requested = False
+            self._batch = []
+            self._result_count = 0
+            self._matched_group_count = 0
+            self._matched_cell_count = 0
+            self._matched_string_count = 0
+            self._matched_file_count = 0
+            self._processing_errors = []
 
         def request_stop(self):
             self._stop_requested = True
@@ -353,7 +503,6 @@ if PYSIDE_AVAILABLE:
         def run(self):
             if process_single_file is None:
                 self.result_signal.emit({
-                    "results": [],
                     "file_count": 0,
                     "result_count": 0,
                     "matched_group_count": 0,
@@ -365,13 +514,6 @@ if PYSIDE_AVAILABLE:
                 return
 
             files = collect_target_files(self.path_str, self.recursive)
-            results = []
-            matched_group_count = 0
-            matched_cell_count = 0
-            matched_string_count = 0
-            matched_file_count = 0
-            processing_errors = []
-
             total_files = len(files)
             self.progress_signal.emit(0, max(total_files, 1), build_progress_message(0, total_files))
 
@@ -380,81 +522,62 @@ if PYSIDE_AVAILABLE:
                 jobs = os.cpu_count() or 1
 
             if jobs > 1 and total_files > 1:
-                file_results, processed_count, stopped = self._process_files_parallel(files, jobs)
+                processed_count, stopped = self._process_files_parallel(files, jobs)
             else:
-                file_results, processed_count, stopped = self._process_files_sequential(files)
+                processed_count, stopped = self._process_files_sequential(files)
 
-            for idx, res in enumerate(file_results):
-                if res is None:
-                    continue
-                f = files[idx]
-                stdout_lines = res.get("stdout", [])
-                counts = res.get("counts", (0, 0, 0))
-                processing_errors.extend(normalize_processing_errors(res.get("stderr", [])))
-                matched_group_count += counts[0]
-                matched_cell_count += counts[1]
-                matched_string_count += counts[2]
-                if stdout_lines:
-                    matched_file_count += 1
-
-                if self.opts["count"]:
-                    if counts[0] > 0:
-                        results.append((
-                            f,
-                            "",
-                            format_count_result_summary(self.opts, counts[0], counts[1], counts[2]),
-                        ))
-                else:
-                    for line in stdout_lines:
-                        line_str = line.rstrip("\r\n")
-                        file_name = ""
-                        sheet_name = ""
-                        content = line_str
-                        if self.opts["with_filename"] and self.opts["with_sheetname"]:
-                            parts = line_str.split(": ", 2)
-                        else:
-                            parts = line_str.split(": ", 1)
-
-                        if self.opts["with_filename"] and self.opts["with_sheetname"] and len(parts) == 3:
-                            file_name, sheet_name, content = parts
-                        elif self.opts["with_filename"] and len(parts) == 2:
-                            file_name, content = parts
-                        elif self.opts["with_sheetname"] and len(parts) == 2:
-                            sheet_name, content = parts
-
-                        results.append((file_name, sheet_name, content))
+            self._flush_result_batch()
 
             status_message = (
                 f"Search stopped. Processed {processed_count}/{total_files} files "
-                f"before stopping; {len(results)} result(s) found so far."
+                f"before stopping; {self._result_count} result(s) found so far."
                 if stopped
                 else format_search_status_message(
                     self.opts,
                     file_count=len(files),
-                    result_count=len(results),
-                    matched_group_count=matched_group_count,
-                    matched_file_count=matched_file_count,
-                    matched_cell_count=matched_cell_count,
-                    matched_string_count=matched_string_count,
+                    result_count=self._result_count,
+                    matched_group_count=self._matched_group_count,
+                    matched_file_count=self._matched_file_count,
+                    matched_cell_count=self._matched_cell_count,
+                    matched_string_count=self._matched_string_count,
                 )
             )
 
             self.result_signal.emit({
-                "results": results,
                 "file_count": len(files),
-                "result_count": len(results),
-                "matched_group_count": matched_group_count,
-                "matched_cell_count": matched_cell_count,
-                "matched_string_count": matched_string_count,
-                "matched_file_count": matched_file_count,
-                "processing_errors": processing_errors,
+                "result_count": self._result_count,
+                "matched_group_count": self._matched_group_count,
+                "matched_cell_count": self._matched_cell_count,
+                "matched_string_count": self._matched_string_count,
+                "matched_file_count": self._matched_file_count,
+                "processing_errors": self._processing_errors,
                 "stopped": stopped,
                 "status_message": status_message,
             })
 
+        def _consume_file_result(self, filepath, res):
+            rows, counts, errors = parse_file_result_rows(self.opts, filepath, res)
+            self._matched_group_count += counts[0]
+            self._matched_cell_count += counts[1]
+            self._matched_string_count += counts[2]
+            self._processing_errors.extend(errors)
+            if rows:
+                self._matched_file_count += 1
+                self._result_count += len(rows)
+                self._batch.extend(rows)
+                while len(self._batch) >= RESULT_BATCH_SIZE:
+                    self.batch_signal.emit(self._batch[:RESULT_BATCH_SIZE])
+                    self._batch = self._batch[RESULT_BATCH_SIZE:]
+
+        def _flush_result_batch(self):
+            if not self._batch:
+                return
+            batch = self._batch
+            self._batch = []
+            self.batch_signal.emit(batch)
+
         def _process_files_sequential(self, files):
             total_files = len(files)
-            file_results = [None] * total_files
             processed_count = 0
             stopped = False
 
@@ -462,7 +585,7 @@ if PYSIDE_AVAILABLE:
                 if self._stop_requested:
                     stopped = True
                     break
-                file_results[idx] = process_single_file(f, self.opts)
+                self._consume_file_result(f, process_single_file(f, self.opts))
                 processed_count = idx + 1
                 self.progress_signal.emit(
                     processed_count,
@@ -470,44 +593,98 @@ if PYSIDE_AVAILABLE:
                     build_progress_message(processed_count, total_files),
                 )
 
-            return file_results, processed_count, stopped
+            return processed_count, stopped
 
         def _process_files_parallel(self, files, jobs):
             total_files = len(files)
-            file_results = [None] * total_files
             processed_count = 0
             stopped = False
-
             worker_fn = functools.partial(process_single_file, opts=self.opts)
+            in_flight = {}
+            next_idx = 0
+            max_in_flight = max(jobs * PARALLEL_IN_FLIGHT_MULTIPLIER, jobs)
+
+            def submit_more():
+                nonlocal next_idx
+                while (
+                    next_idx < total_files
+                    and len(in_flight) < max_in_flight
+                    and not self._stop_requested
+                ):
+                    future = executor.submit(worker_fn, files[next_idx])
+                    in_flight[future] = next_idx
+                    next_idx += 1
+
             with ProcessPoolExecutor(max_workers=jobs) as executor:
-                future_to_idx = {
-                    executor.submit(worker_fn, f): idx for idx, f in enumerate(files)
-                }
-                for future in as_completed(future_to_idx):
+                submit_more()
+                while in_flight:
+                    done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        idx = in_flight.pop(future)
+                        try:
+                            res = future.result()
+                        except Exception as exc:
+                            res = {
+                                "file": files[idx],
+                                "stdout": [],
+                                "stderr": [
+                                    f"Error:\tCould not process file: {files[idx]} ({exc})\n"
+                                ],
+                                "counts": (0, 0, 0),
+                            }
+                        self._consume_file_result(files[idx], res)
+                        processed_count += 1
+                        self.progress_signal.emit(
+                            processed_count,
+                            max(total_files, 1),
+                            build_progress_message(processed_count, total_files),
+                        )
+
                     if self._stop_requested:
                         stopped = True
-                        for pending_future in future_to_idx:
+                        for pending_future in in_flight:
                             pending_future.cancel()
                         break
+                    submit_more()
 
-                    idx = future_to_idx[future]
-                    try:
-                        file_results[idx] = future.result()
-                    except Exception as exc:
-                        file_results[idx] = {
-                            "file": files[idx],
-                            "stdout": [],
-                            "stderr": [f"Error:\tCould not process file: {files[idx]} ({exc})\n"],
-                            "counts": (0, 0, 0),
-                        }
-                    processed_count += 1
-                    self.progress_signal.emit(
-                        processed_count,
-                        max(total_files, 1),
-                        build_progress_message(processed_count, total_files),
+            return processed_count, stopped
+
+
+    class UpdateCheckThread(QThread):
+        result_signal = Signal(object)
+
+        def run(self):
+            try:
+                source = update_source()
+                request = Request(
+                    source["api_url"],
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "TDsearch",
+                    },
+                )
+                with urlopen(request, timeout=5) as response:
+                    release = json.loads(response.read().decode("utf-8"))
+                if source["label"] == "pip":
+                    latest_version = str(
+                        release.get("info", {}).get("version", "")
                     )
+                else:
+                    latest_version = str(release.get("tag_name", "")).lstrip("v")
+                if not latest_version:
+                    raise ValueError(
+                        "Update service did not include a version"
+                    )
+                self.result_signal.emit({
+                    "latest_version": latest_version,
+                    "project_url": release.get(
+                        "project_url", source["project_url"]
+                    ),
+                    "source": source["label"],
+                })
+            except (OSError, URLError, ValueError, json.JSONDecodeError):
+                self.result_signal.emit(None)
 
-            return file_results, processed_count, stopped
 
     class TDSearchGUI(QMainWindow):
         """TDsearch PySide6 Desktop Application."""
@@ -520,6 +697,7 @@ if PYSIDE_AVAILABLE:
             self.resize(900, 720)
             self.search_start_time = None
             self.processing_errors = []
+            self._columns_fitted = False
             self.settings = QSettings(SETTINGS_ORGANIZATION, SETTINGS_APPLICATION)
             app = QApplication.instance()
             self.original_palette = QPalette(app.palette())
@@ -528,6 +706,7 @@ if PYSIDE_AVAILABLE:
 
             self.init_ui()
             self.create_menus()
+            QTimer.singleShot(0, self.check_for_updates_periodically)
 
         def create_menus(self):
             menu_bar = self.menuBar()
@@ -541,9 +720,86 @@ if PYSIDE_AVAILABLE:
 
             help_menu = menu_bar.addMenu("Help")
             about_action = QAction("About TDsearch", self)
-            about_action.setMenuRole(QAction.AboutRole)
             about_action.triggered.connect(self.show_about_dialog)
             help_menu.addAction(about_action)
+
+            help_menu.addSeparator()
+            check_updates_action = QAction("Check for Updates", self)
+            check_updates_action.triggered.connect(
+                lambda: self.check_for_updates(manual=True)
+            )
+            help_menu.addAction(check_updates_action)
+
+        def check_for_updates_periodically(self):
+            last_check = self.settings.value("updates/last_check", 0, type=float)
+            if time() - last_check < UPDATE_CHECK_INTERVAL:
+                return
+            self.settings.setValue("updates/last_check", time())
+            self.check_for_updates(manual=False)
+
+        def check_for_updates(self, manual=True):
+            if (
+                getattr(self, "update_thread", None) is not None
+                and self.update_thread.isRunning()
+            ):
+                return
+            self.update_manual_check = manual
+            self.update_thread = UpdateCheckThread(self)
+            self.update_thread.result_signal.connect(self.on_update_check_finished)
+            self.update_thread.finished.connect(self.clear_update_thread)
+            self.update_thread.finished.connect(self.update_thread.deleteLater)
+            self.update_thread.start()
+
+        def clear_update_thread(self):
+            self.update_thread = None
+
+        def on_update_check_finished(self, result):
+            if result is None:
+                if self.update_manual_check:
+                    QMessageBox.information(
+                        self,
+                        "Check for Updates",
+                        "Could not check for updates. Please try again later.",
+                    )
+                return
+
+            latest_version = result["latest_version"]
+            if version_tuple(latest_version) <= version_tuple(
+                tdsearch_version
+            ):
+                if self.update_manual_check:
+                    QMessageBox.information(
+                        self,
+                        "Check for Updates",
+                        "You are using the latest version of TDsearch "
+                        f"(v{tdsearch_version}).",
+                    )
+                return
+
+            update_box = QMessageBox(self)
+            update_box.setWindowTitle("TDsearch Update Available")
+            update_box.setText(
+                f"TDsearch v{latest_version} is available. "
+                f"You are using v{tdsearch_version}."
+            )
+            if result["source"] == "pip":
+                update_box.setInformativeText(
+                    "Update with: pip install --upgrade tdsearch"
+                )
+                button_text = "Open PyPI"
+            else:
+                update_box.setInformativeText(
+                    "Open the release page to download the latest version."
+                )
+                button_text = "Open Release Page"
+            download_button = update_box.addButton(
+                button_text, QMessageBox.AcceptRole
+            )
+            update_box.addButton(QMessageBox.Cancel)
+            update_box.exec()
+            if update_box.clickedButton() == download_button:
+                import webbrowser
+                webbrowser.open(result["project_url"])
 
         def show_about_dialog(self):
             about_box = QMessageBox(self)
@@ -553,7 +809,8 @@ if PYSIDE_AVAILABLE:
             about_box.setText(
                 f"<h3>TDsearch v{tdsearch_version}</h3>"
                 f"<p>Desktop GUI for Tabular Data Search, powered by xlsxgrep v{xlsxgrep_version}.</p>"
-                "<p>Copyright \u00a9 Ivan Cvitic</p>",
+                "<p>Copyright \u00a9 Ivan Cvitic</p>"
+                "<p>License: MIT</p>",
             )
             about_box.exec()
 
@@ -763,11 +1020,12 @@ if PYSIDE_AVAILABLE:
             main_layout.addWidget(panel, 0)
 
             # --- Results Table ---
-            self.table = QTableWidget(0, 3)
-            self.table.setHorizontalHeaderLabels(["File", "Sheet / Position", "Matched Row / Line"])
-            self.table.horizontalHeaderItem(2).setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self.results_model = ResultsTableModel(self)
+            self.table = QTableView()
+            self.table.setModel(self.results_model)
             self.table.setWordWrap(False)
             self.table.setAlternatingRowColors(True)
+            self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
             self.reset_results_table_layout()
             self.chk_filename.toggled.connect(self.update_output_columns)
             self.chk_sheetname.toggled.connect(self.update_output_columns)
@@ -818,7 +1076,8 @@ if PYSIDE_AVAILABLE:
                 self.inp_path.setText(dir_path)
 
         def clear_results(self):
-            self.table.setRowCount(0)
+            self.results_model.clear()
+            self._columns_fitted = False
             self.reset_results_table_layout()
             self.table.verticalScrollBar().setValue(0)
             self.search_start_time = None
@@ -1037,7 +1296,8 @@ if PYSIDE_AVAILABLE:
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(True)
-            self.table.setRowCount(0)
+            self.results_model.clear()
+            self._columns_fitted = False
             self.reset_results_table_layout()
             self.table.verticalScrollBar().setValue(0)
             self.search_start_time = perf_counter()
@@ -1049,6 +1309,7 @@ if PYSIDE_AVAILABLE:
             self.worker = SearchWorkerThread(path_str, self.chk_recursive.isChecked(), opts)
             self.worker.result_signal.connect(self.on_search_finished)
             self.worker.progress_signal.connect(self.on_search_progress)
+            self.worker.batch_signal.connect(self.on_search_batch)
             self.worker.start()
 
         def stop_search(self):
@@ -1061,6 +1322,15 @@ if PYSIDE_AVAILABLE:
             self.progress_bar.setRange(0, maximum)
             self.progress_bar.setValue(value)
             self.status_bar.showMessage(msg)
+
+        def on_search_batch(self, rows):
+            self.results_model.append_rows(rows)
+            if self._columns_fitted:
+                return
+            if self.results_model.rowCount() <= COLUMN_FIT_ROW_LIMIT:
+                self.fit_results_table_to_contents()
+            if self.results_model.rowCount() >= COLUMN_FIT_ROW_LIMIT:
+                self._columns_fitted = True
 
         def on_search_finished(self, data):
             self.btn_stop.setVisible(False)
@@ -1083,22 +1353,12 @@ if PYSIDE_AVAILABLE:
                 return
 
             self.set_processing_errors(data.get("processing_errors", []))
-            results = data["results"]
-            self.table.setRowCount(len(results))
-            for row_idx, (file_name, sheet_name, content) in enumerate(results):
-                self.table.setItem(row_idx, 0, QTableWidgetItem(file_name))
-                self.table.setItem(row_idx, 1, QTableWidgetItem(sheet_name))
-                self.table.setItem(row_idx, 2, QTableWidgetItem(content))
-
-            if results:
-                self.fit_results_table_to_contents()
-            else:
+            if self.results_model.rowCount() == 0:
                 self.reset_results_table_layout()
-            self.table.verticalScrollBar().setValue(0)
             self.status_bar.showMessage(data["status_message"])
 
         def export_csv(self):
-            row_count = self.table.rowCount()
+            row_count = self.results_model.rowCount()
             if row_count == 0:
                 QMessageBox.warning(self, "No Results", "There are no search results to export.")
                 return
@@ -1114,14 +1374,7 @@ if PYSIDE_AVAILABLE:
                     writer = csv.writer(f)
                     writer.writerow(["File", "Sheet / Position", "Matched Row / Line"])
                     for row in range(row_count):
-                        file_item = self.table.item(row, 0)
-                        sheet_item = self.table.item(row, 1)
-                        content_item = self.table.item(row, 2)
-                        writer.writerow([
-                            file_item.text() if file_item else "",
-                            sheet_item.text() if sheet_item else "",
-                            content_item.text() if content_item else "",
-                        ])
+                        writer.writerow(self.results_model.row_values(row))
 
                 QMessageBox.information(
                     self, "Export Successful", f"Successfully exported {row_count} rows to:\n{file_path}"
