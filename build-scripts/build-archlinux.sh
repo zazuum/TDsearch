@@ -86,7 +86,7 @@ arch=('x86_64')
 url="https://github.com/zazuum/TDsearch"
 license=('MIT')
 depends=('glibc' 'libglvnd')
-provides=('libgl' 'libegl')
+provides=('libGL.so.1' 'libEGL.so.1')
 options=('!strip' '!debug')
 
 package() {
